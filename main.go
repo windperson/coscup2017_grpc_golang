@@ -2,24 +2,27 @@ package main
 
 import (
 	"io"
-	"os"
-	"net"
 	"log"
+	"net"
+	"os"
+
 	"google.golang.org/grpc"
 
 	pb "github.com/windperson/coscup2017_grpc_golang/coscup2017_grpc_proto/save_text"
 	"google.golang.org/grpc/reflection"
 
-	"gopkg.in/oleiade/lane.v1"
 	"time"
+
+	"gopkg.in/oleiade/lane.v1"
 
 	"cloud.google.com/go/speech/apiv1"
 
 	"golang.org/x/net/context"
 
-	speechpb "google.golang.org/genproto/googleapis/cloud/speech/v1"
-	"github.com/golang/protobuf/ptypes/timestamp"
 	"sync"
+
+	"github.com/golang/protobuf/ptypes/timestamp"
+	speechpb "google.golang.org/genproto/googleapis/cloud/speech/v1"
 )
 
 func main() {
@@ -27,15 +30,15 @@ func main() {
 	var wg sync.WaitGroup
 
 	wg.Add(1)
-	go ServeSaveText(&wg)
+	go serveSaveText(&wg)
 
 	wg.Add(1)
-	go InvokeStreamSpeechAPI(&wg)
+	go invokeStreamSpeechAPI(&wg)
 
 	wg.Wait()
 }
 
-func ServeSaveText(wg *sync.WaitGroup){
+func serveSaveText(wg *sync.WaitGroup) {
 	defer wg.Done()
 	listen, err := net.Listen("tcp", ":8888")
 	if err != nil {
@@ -52,41 +55,39 @@ func ServeSaveText(wg *sync.WaitGroup){
 }
 
 type rpcServerImpl struct {
-	recognized_results *lane.Queue
+	recognizeds *lane.Queue
 }
+
 var rpcImpl = rpcServerImpl{
-recognized_results : lane.NewQueue(),
+	recognizeds: lane.NewQueue(),
 }
 
 func (s *rpcServerImpl) SaveResult(req *pb.SaveResultRequest, stream pb.SaveTextService_SaveResultServer) error {
 
-	for s.recognized_results.Head() != nil {
+	for s.recognizeds.Head() != nil {
 
-		var entry = s.recognized_results.Dequeue()
+		var entry = s.recognizeds.Dequeue()
 
-		send_data, ok := entry.(pb.SaveResultResponse)
+		sendData, ok := entry.(pb.SaveResultResponse)
+		if !ok {
+			continue
+		}
 
-		if !ok { continue}
-
-		if err := stream.Send(&send_data); err != nil {
+		if err := stream.Send(&sendData); err != nil {
 			return err
 		}
 
 	}
-
 	return nil
 }
 
-
-
-func InvokeStreamSpeechAPI(wg *sync.WaitGroup){
+func invokeStreamSpeechAPI(wg *sync.WaitGroup) {
 
 	defer wg.Done()
 
-	for ;; {
+	for {
 
 		bgCtx := context.Background()
-
 		ctx, _ := context.WithDeadline(bgCtx, time.Now().Add(205*time.Second))
 
 		client, err := speech.NewClient(ctx)
@@ -97,7 +98,6 @@ func InvokeStreamSpeechAPI(wg *sync.WaitGroup){
 		stream, err := client.StreamingRecognize(ctx)
 		if err != nil {
 			log.Fatal(err)
-
 		}
 
 		exit := make(chan struct{})
@@ -113,7 +113,7 @@ func InvokeStreamSpeechAPI(wg *sync.WaitGroup){
 					Config: &speechpb.RecognitionConfig{
 						Encoding:        speechpb.RecognitionConfig_LINEAR16,
 						SampleRateHertz: 16000,
-						LanguageCode:    "en-US",/* see support lang here:
+						LanguageCode:    "en-US", /* see support lang here:
 						 https://cloud.google.com/speech/docs/languages
 						"cmn-Hans-CN", "cmn-Hant-TW", "ja-JP" damn slow, only english the fastest.*/
 					},
@@ -133,9 +133,9 @@ func InvokeStreamSpeechAPI(wg *sync.WaitGroup){
 			// Pipe stdin to the API.
 			buf := make([]byte, 1024)
 
-			for  {
+			for {
 				select {
-					case <-exit:
+				case <-exit:
 					return
 				default:
 					n, err := os.Stdin.Read(buf)
@@ -183,7 +183,7 @@ func InvokeStreamSpeechAPI(wg *sync.WaitGroup){
 
 			if err := resp.Error; err != nil {
 				rl.Printf("Could not recognize: %v", err)
-				time.Sleep(1000 * time.Millisecond);
+				time.Sleep(1000 * time.Millisecond)
 				rl.Println("re initialize conneciton")
 				stream.CloseSend()
 				close(exit)
@@ -198,19 +198,19 @@ func InvokeStreamSpeechAPI(wg *sync.WaitGroup){
 							alternate.Transcript, alternate.Confidence)
 
 						var saveItem = &pb.SaveResultResponse{
-							ClientId:1,
-							Recognized:alternate.Transcript,
+							ClientId:   1,
+							Recognized: alternate.Transcript,
 							Timestamp: &timestamp.Timestamp{
 								Seconds: timeNow.Unix(),
-								Nanos:int32(timeNow.Nanosecond()),
+								Nanos:   int32(timeNow.Nanosecond()),
 							},
 						}
 
-						if rpcImpl.recognized_results.Full() {
+						if rpcImpl.recognizeds.Full() {
 							rl.Fatalf("recognized buffer fulled")
 						}
-						rpcImpl.recognized_results.Enqueue(saveItem)
-						rl.Printf("recognized buffer length=%d",rpcImpl.recognized_results.Size())
+						rpcImpl.recognizeds.Enqueue(saveItem)
+						rl.Printf("recognized buffer length=%d", rpcImpl.recognizeds.Size())
 					}
 					continue
 				}
@@ -218,6 +218,5 @@ func InvokeStreamSpeechAPI(wg *sync.WaitGroup){
 			}
 		}
 	}
-
 
 }
