@@ -64,16 +64,21 @@ var rpcImpl = rpcServerImpl{
 
 func (s *rpcServerImpl) SaveResult(req *pb.SaveResultRequest, stream pb.SaveTextService_SaveResultServer) error {
 
+	logSent := log.New(os.Stderr, "", 0)
+
 	for s.recognizeds.Head() != nil {
 
 		var entry = s.recognizeds.Dequeue()
 
-		sendData, ok := entry.(pb.SaveResultResponse)
+
+		sendData, ok := entry.(*pb.SaveResultResponse)
 		if !ok {
+			logSent.Println("should be able to cast")
 			continue
 		}
 
-		if err := stream.Send(&sendData); err != nil {
+		logSent.Println("save: %+v", sendData)
+		if err := stream.Send(sendData); err != nil {
 			return err
 		}
 
