@@ -83,114 +83,139 @@ func InvokeStreamSpeechAPI(wg *sync.WaitGroup){
 
 	defer wg.Done()
 
-	bgCtx := context.Background()
+	for ;; {
 
-	ctx, _ := context.WithDeadline(bgCtx, time.Now().Add(205*time.Second))
+		bgCtx := context.Background()
 
-	client, err := speech.NewClient(ctx)
-	if err != nil {
-		log.Fatal(err)
-	}
+		ctx, _ := context.WithDeadline(bgCtx, time.Now().Add(205*time.Second))
 
-	stream, err := client.StreamingRecognize(ctx)
-	if err != nil {
-		log.Fatal(err)
+		client, err := speech.NewClient(ctx)
+		if err != nil {
+			log.Fatal(err)
+		}
 
-	}
+		stream, err := client.StreamingRecognize(ctx)
+		if err != nil {
+			log.Fatal(err)
 
-	// Send the initial configuration message.
-	os.Stderr.WriteString("sending init StreamingConfig...\n")
+		}
 
-	if err := stream.Send(&speechpb.StreamingRecognizeRequest{
+		exit := make(chan struct{})
 
-		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
-			StreamingConfig: &speechpb.StreamingRecognitionConfig{
+		// Send the initial configuration message.
+		os.Stderr.WriteString("sending init StreamingConfig...\n")
 
-				Config: &speechpb.RecognitionConfig{
-					Encoding:        speechpb.RecognitionConfig_LINEAR16,
-					SampleRateHertz: 16000,
-					LanguageCode:    "en-US",
+		if err := stream.Send(&speechpb.StreamingRecognizeRequest{
+
+			StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
+				StreamingConfig: &speechpb.StreamingRecognitionConfig{
+
+					Config: &speechpb.RecognitionConfig{
+						Encoding:        speechpb.RecognitionConfig_LINEAR16,
+						SampleRateHertz: 16000,
+						LanguageCode:    "en-US",
+					},
+					SingleUtterance: false,
+					InterimResults:  true,
 				},
-				SingleUtterance: false,
-				InterimResults:  true,
 			},
-		},
-	}); err != nil {
-		log.Fatal(err)
-	}
+		}); err != nil {
+			log.Fatal(err)
+		}
 
-	go func() {
+		go func() {
 
-		sl := log.New(os.Stderr, "", 0)
-		sl.Println("start sending to Speech API...")
+			sl := log.New(os.Stderr, "", 0)
+			sl.Println("start sending to Speech API...")
 
-		// Pipe stdin to the API.
-		buf := make([]byte, 1024)
+			// Pipe stdin to the API.
+			buf := make([]byte, 1024)
+
+			for  {
+				select {
+					case <-exit:
+					return
+				default:
+					n, err := os.Stdin.Read(buf)
+					if err == io.EOF {
+
+						// Nothing else to pipe, close the stream.
+						if err := stream.CloseSend(); err != nil {
+							sl.Printf("Could not close stream: %v", err)
+						}
+						return
+					}
+
+					if err != nil {
+						sl.Printf("Could not read from stdin: %v", err)
+						continue
+					}
+
+					if err = stream.Send(&speechpb.StreamingRecognizeRequest{
+						StreamingRequest: &speechpb.StreamingRecognizeRequest_AudioContent{
+							AudioContent: buf[:n],
+						},
+					}); err != nil {
+						sl.Printf("Could not send audio: %v", err)
+						return
+					}
+				}
+			}
+
+		}()
+
+		rl := log.New(os.Stderr, "", 0)
 
 		for {
-			n, err := os.Stdin.Read(buf)
-			if err == io.EOF {
+			resp, err := stream.Recv()
 
-				// Nothing else to pipe, close the stream.
-				if err := stream.CloseSend(); err != nil {
-					sl.Fatalf("Could not close stream: %v", err)
-				}
+			if err == io.EOF {
+				stream.CloseSend()
 				return
 			}
 
 			if err != nil {
-				sl.Printf("Could not read from stdin: %v", err)
-				continue
+				stream.CloseSend()
+				rl.Fatalf("Cannot stream results: %v", err)
 			}
 
-			if err = stream.Send(&speechpb.StreamingRecognizeRequest{
-				StreamingRequest: &speechpb.StreamingRecognizeRequest_AudioContent{
-					AudioContent: buf[:n],
-				},
-			}); err != nil {
-				sl.Printf("Could not send audio: %v", err)
+			if err := resp.Error; err != nil {
+				rl.Printf("Could not recognize: %v", err)
+				time.Sleep(1000 * time.Millisecond);
+				rl.Println("re initialize conneciton")
+				stream.CloseSend()
+				close(exit)
+				break
 			}
-		}
 
-	}()
+			for _, result := range resp.Results {
+				if result.IsFinal {
+					var timeNow = time.Now()
+					for _, alternate := range result.Alternatives {
+						rl.Printf("\n\nGOT: { %s } ,\ncorrect= %f %%\n\n",
+							alternate.Transcript, alternate.Confidence)
 
-	rl := log.New(os.Stderr, "", 0)
+						var saveItem = &pb.SaveResultResponse{
+							ClientId:1,
+							Recognized:alternate.Transcript,
+							Timestamp: &timestamp.Timestamp{
+								Seconds: timeNow.Unix(),
+								Nanos:int32(timeNow.Nanosecond()),
+							},
+						}
 
-	for {
-		resp, err := stream.Recv()
-
-		if err == io.EOF {
-			break
-		}
-
-		if err != nil {
-			log.Fatalf("Cannot stream results: %v", err)
-		}
-
-		if err := resp.Error; err != nil {
-			log.Fatalf("Could not recognize: %v", err)
-		}
-
-		for _, result := range resp.Results {
-			if result.IsFinal {
-				var timeNow = time.Now()
-				for _, alternate := range result.Alternatives {
-					rl.Printf("\n\nGOT: { %s } ,\ncorrect= %f %%\n\n",
-						alternate.Transcript, alternate.Confidence)
-
-					var saveItem = &pb.SaveResultResponse{
-						ClientId:1,
-						Recognized:alternate.Transcript,
-						Timestamp: &timestamp.Timestamp{
-							Seconds: timeNow.Unix(),
-							Nanos:int32(timeNow.Nanosecond()),
-						},
+						if rpcImpl.recognized_results.Full() {
+							rl.Fatalf("recognized buffer fulled")
+						}
+						rpcImpl.recognized_results.Enqueue(saveItem)
+						rl.Printf("recognized buffer length=%d",rpcImpl.recognized_results.Size())
 					}
-					rpcImpl.recognized_results.Enqueue(saveItem)
+					continue
 				}
-				continue
+				rl.Printf("%s receive= %+v\n", time.Now().Format(time.RFC850), result)
 			}
-			rl.Printf("%s receive= %+v\n", time.Now().Format(time.RFC850), result)
 		}
 	}
+
+
 }
