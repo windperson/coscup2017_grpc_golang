@@ -113,7 +113,9 @@ func InvokeStreamSpeechAPI(wg *sync.WaitGroup){
 					Config: &speechpb.RecognitionConfig{
 						Encoding:        speechpb.RecognitionConfig_LINEAR16,
 						SampleRateHertz: 16000,
-						LanguageCode:    "en-US",
+						LanguageCode:    "en-US",/* see support lang here:
+						 https://cloud.google.com/speech/docs/languages
+						"cmn-Hans-CN", "cmn-Hant-TW", "ja-JP" damn slow, only english the fastest.*/
 					},
 					SingleUtterance: false,
 					InterimResults:  true,
