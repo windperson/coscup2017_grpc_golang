@@ -1,11 +1,11 @@
 # coscup2017_grpc_golang
 COSCUP 2017 golang gRPC speech to text demo server code 
 
-###To build
+### To build
 
 You need to install [Go](https://golang.org/) to build it.
 
-###To run
+### To run
 1. Get [gstreamer tools](https://gstreamer.freedesktop.org/ ) installed on your system.
 
 2. Setup [Google Cloud Platform Speech API](https://cloud.google.com/docs/authentication/getting-started#creating_the_service_account), generate authenticate json config file and store it in somewhere local path.
@@ -15,4 +15,3 @@ You need to install [Go](https://golang.org/) to build it.
 gst-launch-1.0 -v alsasr! audioconvert ! audioresample ! audio/x-raw,channels=1,rate=16000 ! filesink location=/dev/stdout | env GOOGLE_APPLICATION_CREDENTIALS=[gcp_api_auth_json_config_file_path] ./coscup2017_grpc_golang
 
 ```
-
